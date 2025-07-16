@@ -47,6 +47,22 @@ const DEFAULT_BLOCK_REQUEST_URL_PATTERNS = ['.css', '.jpg', '.jpeg', '.png', '.s
 
 const log = log_.child({ prefix: 'Puppeteer Utils' });
 
+export interface LoginResult {
+    success: boolean;
+    message: string;
+    redirectUrl?: string;
+}
+export interface LoginInputs {
+    username?: string;
+    password?: string;
+    selectors?: {
+        usernameSelector?: string;
+        passwordSelector?: string;
+        submitButtonSelector?: string;
+        nextButtonSelector?: string;
+    };
+    onLoginResult?: (testString: string) => Promise<LoginResult>;
+}
 export interface DirectNavigationOptions {
     /**
      * Maximum operation time in milliseconds, defaults to 30 seconds, pass `0` to disable timeout. The
@@ -1059,6 +1075,15 @@ export interface PuppeteerContextUtils {
      * Tries to close cookie consent modals on the page. Based on the I Don't Care About Cookies browser extension.
      */
     closeCookieModals(): Promise<void>;
+
+    /**
+     * Performs login on the current page with configurable success detection.
+     */
+    login(options: {
+        username?: string;
+        password?: string;
+        onLoginResult?: (testString: string) => Promise<LoginResult>;
+    }): Promise<LoginResult>;
 }
 
 /** @internal */
@@ -1113,24 +1138,84 @@ export function registerUtilsToContext(
     context.saveSnapshot = async (options?: SaveSnapshotOptions) =>
         saveSnapshot(context.page, { ...options, config: context.crawler.config });
     context.closeCookieModals = async () => closeCookieModals(context.page);
+    context.login = async (inputs) => login(context.page, inputs);
 }
 
-export { enqueueLinksByClickingElements, addInterceptRequestHandler, removeInterceptRequestHandler };
-
-/** @internal */
-export const puppeteerUtils = {
-    injectFile,
-    injectJQuery,
-    enqueueLinksByClickingElements,
-    blockRequests,
-    blockResources,
-    cacheResponses,
-    compileScript,
-    gotoExtended,
-    addInterceptRequestHandler,
-    removeInterceptRequestHandler,
-    infiniteScroll,
-    saveSnapshot,
-    parseWithCheerio,
-    closeCookieModals,
-};
+/**
+ * Performs login on the current page with configurable success detection.
+ */
+export async function login(page: Page, inputs: LoginInputs): Promise<LoginResult> {
+    const { username, password, selectors } = inputs;
+    const loginAttemptResult: LoginResult = {
+        success: false,
+        message: '',
+    };
+    console.log('login called with parameters:');
+    console.log('  username:', username);
+    console.log('  password:', password);
+    console.log('  selectors:', selectors);
+    try {
+        if (selectors?.usernameSelector) {
+            console.log('username selector provided manually');
+            const usernameField = await page.$(selectors.usernameSelector);
+            console.log('provided username selector element found');
+            if (usernameField) {
+                if (username) {
+                    console.log('username input provided, inputting it now');
+                    await usernameField.type(username);
+                    console.log('username inputted');
+                } else {
+                    console.log('username input not provided, checking username is autofilled');
+                    const value = await page.evaluate((el) => (el as HTMLInputElement).value, usernameField);
+                    if (!value) {
+                        console.log('no username provided or autofilled');
+                        loginAttemptResult.message = 'Username is required but not provided.';
+                        return loginAttemptResult;
+                    }
+                }
+            }
+        }
+        if (selectors?.passwordSelector) {
+            console.log('password selector provided manually');
+            const passwordField = await page.$(selectors.passwordSelector);
+            console.log('provided password selector element found');
+            if (passwordField) {
+                if (password) {
+                    console.log('password input provided, inputting it now');
+                    await passwordField.type(password);
+                    console.log('password inputted');
+                } else {
+                    console.log('password input not provided, checking password is autofilled');
+                    const value = await page.evaluate((el) => (el as HTMLInputElement).value, passwordField);
+                    if (!value) {
+                        console.log('no password provided or autofilled');
+                        loginAttemptResult.message = 'Password is required but not provided.';
+                        return loginAttemptResult;
+                    }
+                }
+            }
+        }
+        console.log('Attempting default logins now');
+        const defaultSelectors = {
+            username: ['#username', '[name="username"]', '[name="email"]', '#email', '.username-input'],
+            password: ['#password', '[name="password"]', '[type="password"]', '.password-input'],
+            submitButton: [
+                '[type="submit"]',
+                'button[type="submit"]',
+                '.login-button',
+                '#login-button',
+                'button:contains("Login")',
+                'input[value*="Login"]',
+            ],
+        };
+        console.log('Attempting to fill username field...');
+        let usernameSelector = await page.$(defaultSelectors.username[0]);
+        console.log(usernameSelector);
+        console.log('Attempting to fill password field...');
+        let passwordSelector = await page.$(defaultSelectors.password[0]);
+        console.log(passwordSelector);
+    } catch (error) {
+        console.log('Error occurred during login process:', error);
+    }
+    return loginAttemptResult;
+}
