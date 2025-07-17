@@ -51,11 +51,11 @@ const crawler = new PuppeteerCrawler(
             const filePath = `./${safeFilename}.log`;
             const resultLines = [
                 `Login result for ${request.url}:`,
-                ...Object.entries(result).map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+                ...Object.entries(result).map(([key, value]) => `${key}: ${JSON.stringify(value)}`),
             ];
             resultLines.push('Debug messages:');
             if (result.debugLogs && Array.isArray(result.debugLogs)) {
-                resultLines.push(...result.debugLogs.map(log => log));
+                resultLines.push(...result.debugLogs.map((log) => log));
             }
             await writeFile(filePath, resultLines.join('\n') + '\n', 'utf8');
         },

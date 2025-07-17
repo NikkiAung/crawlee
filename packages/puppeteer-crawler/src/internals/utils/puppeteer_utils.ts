@@ -1182,7 +1182,13 @@ export async function login(page: Page, inputs: LoginInputs, lazySearch?: boolea
             debugLogs.push(`Password inputted successfully: ${passwordInputted}`);
         }
         debugLogs.push('Attempting to find submit button selector using findSelector function');
-        const submitButtonElement = await findSelector(page, 'submitButton', selectors?.submitButtonSelector, true, debugLogs);
+        const submitButtonElement = await findSelector(
+            page,
+            'submitButton',
+            selectors?.submitButtonSelector,
+            true,
+            debugLogs,
+        );
         if (!submitButtonElement) {
             throw new Error('Submit button selector not found');
         } else {
@@ -1229,12 +1235,42 @@ async function findSelector(
     debugLogs?.push(`No ${selectorType} selector provided, attempting to use default selectors`);
     const defaultSelectors: Record<string, string[]> = {
         username: [
-            '#username', '#user-name', '#login', '#email', '#user', '#username-input', 
-            '[name="username"]', '[name="user-name"]', '[name="login"]', '[name="email"]', '[name="user"]', '[name="user-input"]',
-            '[id="username"]', '[id="user-name"]', '[id="login"]', '[id="email"]', '[id="user"]', '[id="user-input"]',
-            '.username', '.user-name', '.login', '.email', '.user', '.user-input',
-            '[name*="username"]', '[name*="user-name"]', '[name*="login"]', '[name*="email"]', '[name*="user"]', '[name*="user-input"]',
-            '[id*="username"]', '[id*="user-name"]', '[id*="login"]', '[id*="email"]', '[id*="user"]', '[id*="user-input"]',
+            '#username',
+            '#user-name',
+            '#login',
+            '#email',
+            '#user',
+            '#username-input',
+            '[name="username"]',
+            '[name="user-name"]',
+            '[name="login"]',
+            '[name="email"]',
+            '[name="user"]',
+            '[name="user-input"]',
+            '[id="username"]',
+            '[id="user-name"]',
+            '[id="login"]',
+            '[id="email"]',
+            '[id="user"]',
+            '[id="user-input"]',
+            '.username',
+            '.user-name',
+            '.login',
+            '.email',
+            '.user',
+            '.user-input',
+            '[name*="username"]',
+            '[name*="user-name"]',
+            '[name*="login"]',
+            '[name*="email"]',
+            '[name*="user"]',
+            '[name*="user-input"]',
+            '[id*="username"]',
+            '[id*="user-name"]',
+            '[id*="login"]',
+            '[id*="email"]',
+            '[id*="user"]',
+            '[id*="user-input"]',
         ],
         nextButton: [
             '#next',
@@ -1299,7 +1335,7 @@ async function hasFilledContent(
  */
 async function inputField(
     page: Page,
-    element: ElementHandle, 
+    element: ElementHandle,
     value?: string,
     doubleCheck?: boolean,
     prioritizeAutofill?: boolean,
@@ -1325,14 +1361,24 @@ async function inputField(
         await element!.click();
         await element!.type(value);
         if (doubleCheck) {
-            let inputValueFilled = await hasFilledContent(page, element, 'First input attempt failed, trying again...', debugLogs);
+            let inputValueFilled = await hasFilledContent(
+                page,
+                element,
+                'First input attempt failed, trying again...',
+                debugLogs,
+            );
             if (inputValueFilled) {
                 debugLogs?.push('Input value filled');
                 return true;
             } else {
                 await element!.click();
                 await element!.type(value);
-                inputValueFilled = await hasFilledContent(page, element, 'Input value not present after double check; input failed.', debugLogs);
+                inputValueFilled = await hasFilledContent(
+                    page,
+                    element,
+                    'Input value not present after double check; input failed.',
+                    debugLogs,
+                );
                 return inputValueFilled;
             }
         }
