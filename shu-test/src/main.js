@@ -1,12 +1,13 @@
 import { PuppeteerCrawler } from '@crawlee/puppeteer'; //**1
 import { RequestQueue } from 'crawlee'; //**2
+import { writeFile } from 'fs/promises';
+import { basename } from 'path';
 
 const myRequestQueue = await RequestQueue.open(); // Alternative for RequestQueue is RequestList
-//await myRequestQueue.addRequest({ url: 'https://crawlee.dev' });
 await myRequestQueue.addRequests([
-    { url: 'https://www.google.com' },
-    //{ url: 'https://www.elcamino.instructure.com' },
-    { url: 'https://www.youtube.com' },
+    { url: 'https://www.saucedemo.com/' },
+    { url: 'https://practicetestautomation.com/practice-test-login/' },
+    //{ url: 'https://automationexercise.com/login' },
 ]);
 
 const crawler = new PuppeteerCrawler(
@@ -27,19 +28,36 @@ const crawler = new PuppeteerCrawler(
             const title = await page.title();
             log.info(`Page title: ${title}`);
 
-            const result1 = await login({
-                username: 'user@example.com',
-                password: 'password123',
-            });
-            const result2 = await login({
-                username: 'hello',
-                password: 'whatever',
-                selectors: {
-                    usernameSelector: '#username',
-                    passwordSelector: '#password',
-                    submitButtonSelector: '#submit',
-                },
-            });
+            let result;
+            if (request.loadedUrl && request.loadedUrl.includes('saucedemo.com')) {
+                result = await login({
+                    username: 'standard_user',
+                    password: 'secret_sauce',
+                });
+            } else {
+                result = await login({
+                    username: 'student',
+                    password: 'Password123',
+                    selectors: {
+                        usernameSelector: '#wrong',
+                        passwordSelector: '#wrong',
+                        submitButtonSelector: '#wrong',
+                    },
+                });
+            }
+            log.debug(`Login result for ${request.url}: ${JSON.stringify(result)}`);
+            // Write results and debug to a file
+            const safeFilename = title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            const filePath = `./${safeFilename}.log`;
+            const resultLines = [
+                `Login result for ${request.url}:`,
+                ...Object.entries(result).map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+            ];
+            resultLines.push('Debug messages:');
+            if (result.debugLogs && Array.isArray(result.debugLogs)) {
+                resultLines.push(...result.debugLogs.map(log => log));
+            }
+            await writeFile(filePath, resultLines.join('\n') + '\n', 'utf8');
         },
     }, // Can add config here for any crawler **3
 );
