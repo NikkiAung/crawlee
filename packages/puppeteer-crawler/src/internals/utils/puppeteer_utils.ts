@@ -50,6 +50,13 @@ const log = log_.child({ prefix: 'Puppeteer Utils' });
 export interface LoginResult {
     success: boolean;
     message: string;
+    loginType: string;
+    selectorsUsed?: {
+        usernameSelectorUsed?: string;
+        passwordSelectorUsed?: string;
+        submitButtonSelectorUsed?: string;
+        nextButtonSelectorUsed?: string;
+    };
     redirectUrl?: string;
 }
 export interface LoginInputs {
@@ -1138,73 +1145,180 @@ export function registerUtilsToContext(
     context.saveSnapshot = async (options?: SaveSnapshotOptions) =>
         saveSnapshot(context.page, { ...options, config: context.crawler.config });
     context.closeCookieModals = async () => closeCookieModals(context.page);
-    context.login = async (inputs) => login(context.page, inputs);
+    context.login = async (
+        inputs: LoginInputs,
+        selectorOptions?: { useDefaults?: boolean; findAllSelectors?: boolean },
+        inputOptions?: { doubleCheck?: boolean; prioritizeAutofill?: boolean },
+    ) => login(context.page, inputs, selectorOptions, inputOptions);
 }
 
 /**
- * Performs login on the current page with configurable success detection.
+ * @param page - The Puppeteer {@link Page} instance representing the browser page where login will be performed.
+ * @param inputs - An object containing login credentials and optional selectors:
+ *   - username: The username or email to input.
+ *   - password: The password to input.
+ *   - selectors: Optional custom CSS selectors for username, password, submit, and next button fields.
+ *   - onLoginResult: Optional async callback to further validate login success.
+ * @param selectorOptions - Options controlling selector search behavior:
+ *   - useDefaults: If true, falls back to default selectors when custom selectors are not found.
+ *   - findAllSelectors: If true, continues searching for all selectors even if some are missing or input fails.
+ * @param inputOptions - Options controlling input behavior:
+ *   - doubleCheck: If true, retries input if the first attempt does not fill the field.
+ *   - prioritizeAutofill: If true, prefers autofilled content in input fields over manual input.
+ * 
+ * @returns A Promise resolving to a {@link LoginResult} object indicating the outcome of the login attempt,
+ * including success status, message, login type, selectors used, and any detected redirect URL.
  */
-export async function login(page: Page, inputs: LoginInputs, lazySearch?: boolean): Promise<LoginResult> {
+export async function login(
+    page: Page,
+    inputs: LoginInputs,
+    selectorOptions?: { useDefaults?: boolean; findAllSelectors?: boolean },
+    inputOptions?: { doubleCheck?: boolean; prioritizeAutofill?: boolean },
+): Promise<LoginResult> {
     const { username, password, selectors } = inputs;
+    const useDefaults = selectorOptions?.useDefaults ?? false;
+    const findAllSelectors = selectorOptions?.findAllSelectors ?? false;
+    const doubleCheck = inputOptions?.doubleCheck ?? false;
+    const prioritizeAutofill = inputOptions?.prioritizeAutofill ?? false;
     const loginAttemptResult: LoginResult = {
         success: false,
         message: '',
+        loginType: '',
     };
     const debugLogs: string[] = [];
-    debugLogs.push(`login called with parameters:`);
-    debugLogs.push(`  username: ${username}`);
-    debugLogs.push(`  password: ${password}`);
-    debugLogs.push(`  selectors: ${JSON.stringify(selectors)}`);
+    const currentUrl = page.url();
     (loginAttemptResult as any).debugLogs = debugLogs;
     try {
-        debugLogs.push('Attempting to find username selector using findSelector function');
-        const usernameElement = await findSelector(page, 'username', selectors?.usernameSelector, true, debugLogs);
+        // Looking for a username field
+        const { element: usernameElement, selectorUsed: usernameSelectorString } = await findSelector(
+            page,
+            'username',
+            selectors?.usernameSelector,
+            useDefaults,
+            debugLogs,
+        );
         if (!usernameElement) {
-            throw new Error('Username selector not found');
+            if (!findAllSelectors) {
+                throw new Error('Username selector not found');
+            }
         } else {
-            let usernameInputted = await inputField(page, usernameElement, username, false, false, debugLogs);
+            // Inputting username
+            let usernameInputted = await inputField(
+                page,
+                usernameElement,
+                username,
+                doubleCheck,
+                prioritizeAutofill,
+                debugLogs,
+            );
             if (!usernameInputted) {
-                throw new Error('Failed to input username');
-            }
-            debugLogs.push(`Username inputted successfully: ${usernameInputted}`);
+                debugLogs.push('Failed to input username');
+                if (!findAllSelectors) {
+                    throw new Error('Failed to input username');
+                }
+                debugLogs.push('Continuing despite username input failure (findAllSelectors=true)');
+            } 
         }
-        debugLogs.push('Attempting to find password selector using findSelector function');
-        // look for next button first, if provided
-        const passwordElement = await findSelector(page, 'password', selectors?.passwordSelector, true, debugLogs);
-        if (!passwordElement) {
-            // may be a two-step form with incorrently provided next button selector
-            throw new Error('Password selector not found');
+        // Looking for a next button
+        const { element: nextButtonElement, selectorUsed: nextButtonSelectorString } = await findSelector(
+            page,
+            'nextButton',
+            selectors?.nextButtonSelector,
+            useDefaults,
+            debugLogs,
+        );
+        if (nextButtonElement) {
+            loginAttemptResult.loginType += 'two-step';
+            try {
+                await nextButtonElement.click();
+            } catch (error) {
+                debugLogs.push('Failed to click next button');
+                if (!findAllSelectors) {
+                    throw new Error('Failed to click next button');
+                }
+            }
         } else {
-            let passwordInputted = await inputField(page, passwordElement, password, true, false, debugLogs);
-            if (!passwordInputted) {
-                throw new Error('Failed to input password');
-            }
-            debugLogs.push(`Password inputted successfully: ${passwordInputted}`);
+            debugLogs.push('Next button not found, trying to look for password selector');
         }
-        debugLogs.push('Attempting to find submit button selector using findSelector function');
-        const submitButtonElement = await findSelector(
+        // Looking for a password field
+        const { element: passwordElement, selectorUsed: passwordSelectorString } = await findSelector(
+            page,
+            'password',
+            selectors?.passwordSelector,
+            useDefaults,
+            debugLogs,
+        );
+        if (!passwordElement) {
+            debugLogs.push('Password selector not found');
+            loginAttemptResult.loginType = 'unknown';
+            if (!findAllSelectors) {
+                throw new Error('Password selector not found');
+            }
+        } else {
+            loginAttemptResult.loginType = 'single-step';
+            // Inputting password
+            let passwordInputted = await inputField(
+                page,
+                passwordElement,
+                password,
+                doubleCheck,
+                prioritizeAutofill,
+                debugLogs,
+            );
+            if (!passwordInputted) {
+                debugLogs.push('Failed to input password');
+                if (!findAllSelectors) {
+                    throw new Error('Failed to input password');
+                }
+            } 
+        }
+        // Looking for a submit button
+        const { element: submitButtonElement, selectorUsed: submitButtonSelectorString } = await findSelector(
             page,
             'submitButton',
             selectors?.submitButtonSelector,
-            true,
+            useDefaults,
             debugLogs,
         );
         if (!submitButtonElement) {
-            throw new Error('Submit button selector not found');
+            if (!findAllSelectors) {
+                throw new Error('Submit button selector not found');
+            }
+            debugLogs.push('findAllSelectors search completed');
         } else {
             try {
+                const urlBeforeSubmit = page.url();
+                debugLogs.push(`URL before submit: ${urlBeforeSubmit}`);
                 await submitButtonElement.click();
             } catch (error) {
                 debugLogs.push('Failed to click submit button');
-                throw new Error('Failed to click submit button');
+                if (!findAllSelectors) {
+                    throw new Error('Failed to click submit button');
+                }
+                debugLogs.push('Submit button click failed, searching for other selectors?');
             }
         }
-        loginAttemptResult.message = 'All steps completed successfully';
-        // check to see if the login worked
-        // if it didn't work and the user has turned on non-lazy search, use another function to find selectors
-        loginAttemptResult.success = true;
+        // Check if the page has redirected after clicking submit
+        await sleep(2000);
+        const finalUrl = page.url();
+        if (finalUrl !== currentUrl) {
+            loginAttemptResult.redirectUrl = finalUrl;
+            debugLogs.push(`Redirect URL detected: ${finalUrl}`);
+            loginAttemptResult.success = true;
+            loginAttemptResult.message = 'Login attempt succeeded';
+        } else {
+            loginAttemptResult.success = false;
+            loginAttemptResult.message = 'Login attempt failed - URL unchanged';
+        }
+        loginAttemptResult.selectorsUsed = {
+            usernameSelectorUsed: usernameSelectorString,
+            passwordSelectorUsed: passwordSelectorString,
+            submitButtonSelectorUsed: submitButtonSelectorString,
+            nextButtonSelectorUsed: nextButtonSelectorString,
+        };
     } catch (error) {
-        loginAttemptResult.message = `Error finding selectors: ${(error as Error).message}`;
+        loginAttemptResult.message = `Failure due to error: ${(error as Error).message}`;
+        loginAttemptResult.success = false;
         debugLogs.push(loginAttemptResult.message);
     }
     return loginAttemptResult;
@@ -1219,58 +1333,35 @@ async function findSelector(
     page: Page,
     selectorType: string,
     selector?: string,
-    useDefaults = false,
+    defaults?: boolean,
     debugLogs?: string[],
-) {
+): Promise<{ element: ElementHandle | null; selectorUsed?: string }> {
+    let selectorUsed: string | undefined;
+
     if (selector) {
-        debugLogs?.push(`${selectorType} selector provided manually`);
         const element = await page.$(selector);
         if (element) {
             debugLogs?.push(`Provided ${selectorType} selector element found: ${selector}`);
-            return element;
+            selectorUsed = selector;
+            return { element, selectorUsed };
         } else {
             debugLogs?.push(`Provided ${selectorType} selector element not found: ${selector}`);
         }
     }
-    debugLogs?.push(`No ${selectorType} selector provided, attempting to use default selectors`);
     const defaultSelectors: Record<string, string[]> = {
         username: [
             '#username',
-            '#user-name',
-            '#login',
             '#email',
-            '#user',
-            '#username-input',
             '[name="username"]',
-            '[name="user-name"]',
-            '[name="login"]',
             '[name="email"]',
+            '[name="login"]',
+            '#login',
+            '[autocomplete="username"]',
+            '[autocomplete="email"]',
+            '#user',
             '[name="user"]',
-            '[name="user-input"]',
-            '[id="username"]',
-            '[id="user-name"]',
-            '[id="login"]',
-            '[id="email"]',
-            '[id="user"]',
-            '[id="user-input"]',
-            '.username',
-            '.user-name',
-            '.login',
-            '.email',
-            '.user',
-            '.user-input',
-            '[name*="username"]',
-            '[name*="user-name"]',
-            '[name*="login"]',
-            '[name*="email"]',
-            '[name*="user"]',
-            '[name*="user-input"]',
-            '[id*="username"]',
-            '[id*="user-name"]',
-            '[id*="login"]',
-            '[id*="email"]',
-            '[id*="user"]',
-            '[id*="user-input"]',
+            '[placeholder*="username" i]',
+            '[placeholder*="email" i]',
         ],
         nextButton: [
             '#next',
@@ -1278,37 +1369,43 @@ async function findSelector(
             'button[type="next"]',
             '.next-button',
             '#next-button',
-            'button:contains("Next")',
-            'input[value*="Next"]',
         ],
-        password: ['#password', '[name="password"]', '[type="password"]', '.password-input'],
+        password: [
+            '#password',
+            '[name="password"]',
+            '[type="password"]',
+            '[autocomplete="current-password"]',
+        ],
         submitButton: [
             '[type="submit"]',
             'button[type="submit"]',
+            '#submit',
+            '#login',
             '.login-button',
-            '#login-button',
-            'button:contains("Login")',
-            'input[value*="Login"]',
+            '[value="Login"]',
+            '[value="Submit"]',
+            '.submit-button',
+            '[value="Sign in"]',
         ],
     };
-    if (!selector || useDefaults) {
-        debugLogs?.push(`Attempting to find default ${selectorType} selector`);
+    if (!selector || defaults) {
         for (const candidateSelector of defaultSelectors[selectorType]) {
             const element = await page.$(candidateSelector);
             if (element) {
-                debugLogs?.push(`Found default ${selectorType} with selector: ${candidateSelector}`);
-                return element;
+                selectorUsed = candidateSelector;
+                debugLogs?.push(`Default ${selectorType} selector found: ${selectorUsed}`);
+                return { element, selectorUsed };
             }
         }
     }
     debugLogs?.push(`No ${selectorType} selector found`);
-    return null;
+    return { element: null, selectorUsed: undefined };
 }
 
 /**
  * Helper function to check if an input element has autofilled content.
  * Returns true if the input field already contains a value, false otherwise.
- * If autofill content doesn't exist, outputs the provided message.
+ * If autofill content doesn'elementutputs the provided message.
  * Always outputs that autofilled content is found if autofill does exist.
  */
 async function hasFilledContent(
@@ -1317,7 +1414,9 @@ async function hasFilledContent(
     message?: string,
     debugLogs?: string[],
 ): Promise<boolean> {
+    // Note: I haven't tested autofill yet, but the function does check for content
     if (!element) return false;
+    await element.focus();
     const value = await page.evaluate((el) => (el as HTMLInputElement).value, element);
     if (value) {
         debugLogs?.push('Input field contains a value (autofilled or previously inputted).');
@@ -1341,23 +1440,16 @@ async function inputField(
     prioritizeAutofill?: boolean,
     debugLogs?: string[],
 ): Promise<boolean> {
-    debugLogs?.push(`Checking for autofilled content`);
-    let hasAutofilledContent = await hasFilledContent(page, element, 'No autofilled content found.', debugLogs);
     if (prioritizeAutofill) {
-        debugLogs?.push('Prioritizing autofill content.');
-        if (!hasAutofilledContent) {
-            debugLogs?.push('No value or autofilled content provided for input field');
-            return false;
-        }
-        return hasAutofilledContent;
-    } else {
-        debugLogs?.push('Autofill not prioritized, proceeding to user input');
-    }
+        let hasAutofilledContent = await hasFilledContent(page, element, 'Autofill prioritized but no autofilled content found.', debugLogs);
+        if (hasAutofilledContent) return hasAutofilledContent;
+    } 
     try {
         if (!value) {
             debugLogs?.push('No value provided for input!');
             return false;
         }
+        await element!.focus();
         await element!.click();
         await element!.type(value);
         if (doubleCheck) {
@@ -1371,6 +1463,8 @@ async function inputField(
                 debugLogs?.push('Input value filled');
                 return true;
             } else {
+                await sleep(250);
+                await element!.focus();
                 await element!.click();
                 await element!.type(value);
                 inputValueFilled = await hasFilledContent(
